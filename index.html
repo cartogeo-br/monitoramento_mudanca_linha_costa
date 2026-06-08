@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Monitoramento de Mudanças em Linhas de Costa</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@300;400;600;700&family=Source+Code+Pro:wght@400;600&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  --bg:#050d08;--bg2:#0a1a0d;--bg3:#0f2214;
+  --border:#163520;--muted:#3d6b4a;--txt:#dcfce7;--txt2:#86efac;
+  --green:#4ade80;
+  --erosao:#ff3333; /* vermelho para erosão */
+  --prograd:#1e90ff; /* azul para progradação / outros */
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Source Sans 3',sans-serif;background:var(--bg);color:var(--txt);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+/* Header */
+#hdr{height:58px;display:flex;align-items:center;gap:16px;padding:0 18px;background:linear-gradient(90deg,#020805,#081409);border-bottom:1px solid var(--border)}
+.hdr-icon{font-size:22px}
+.hdr-t h1{font-size:15px;color:#bbf7d0}
+.hdr-t p{font-size:11px;color:var(--muted)}
+
+/* Main layout */
+#main{display:flex;flex:1;overflow:hidden}
+#map{flex:1;position:relative}
+#panel{width:460px;background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:auto;padding:16px 12px;gap:12px}
+
+/* Panel top */
+.panel-title h2{font-size:18px;color:#fff;margin-bottom:4px}
+.panel-sub{font-size:12px;color:var(--muted);margin-bottom:8px}
+.btn-export{padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:#eef2f7;color:#071219;font-weight:700;cursor:pointer}
+
+/* Cards */
+.card{background:var(--bg3);border:1px solid rgba(255,255,255,0.03);border-radius:10px;padding:12px}
+.card h4{font-size:11px;color:var(--muted);margin-bottom:8px}
+
+/* Fenômeno list (antes Hotspots) */
+.hotspots{display:flex;flex-direction:column;gap:8px}
+.hs-item{display:flex;justify-content:space-between;align-items:center;padding:10px;border-radius:8px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent)}
+.hs-left{display:flex;gap:10px;align-items:center}
+.hs-bullet{width:12px;height:12px;border-radius:50%}
+.hs-label{font-size:13px;color:var(--muted)}
+.hs-value{font-weight:700;color:var(--txt2)}
+
+/* KPIs large (4 col layout, ajustado para centralizar) */
+.kgrid{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:12px;
+  align-items:center;
+  width:100%;
+  margin:0;
+  padding:0;
+}
+.kpi{
+  background:#fff;
+  border-radius:8px;
+  padding:10px 8px;
+  color:#05241f;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  min-height:80px; /* garante alinhamento vertical */
+  box-shadow: 0 1px 0 rgba(0,0,0,0.04) inset;
+}
+.klabel{font-size:12px;color:#6b7280;margin-bottom:6px}
+.kval{font-family:'Source Code Pro',monospace;font-size:22px;font-weight:800;letter-spacing:0.6px}
+
+/* Ajuste fino para números grandes com pontos como separador (parecido com a imagem) */
+.kval span{display:inline-block;padding-left:2px}
+
+/* Logo container (centralizada abaixo dos cards) */
+.logo-container{display:flex;justify-content:center;align-items:center;margin-top:8px;margin-bottom:6px}
+.logo-container img{max-width:220px;height:auto;display:block}
+/* reduz em telas menores */
+@media(max-width:1000px){ .logo-container img{max-width:180px;} }
+@media(max-width:480px){ .logo-container img{max-width:140px;} }
+
+/* Filter / upload area */
+#top-controls{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.select, .upload-btn{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--txt2);padding:6px 8px;border-radius:8px;cursor:pointer}
+#load-overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:999;background:rgba(0,0,0,0.45);flex-direction:column;gap:10px}
+#load-overlay .spin{width:46px;height:46px;border:3px solid rgba(255,255,255,0.06);border-top-color:var(--green);border-radius:50%;animation:rot .8s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+#load-detail{color:#9cae9b;font-size:13px}
+.small-muted{font-size:12px;color:var(--muted);margin-top:8px}
+
+/* Basemap toggle (top-right) */
+#basemap-toggle{position:absolute;top:10px;right:12px;z-index:900;display:flex;gap:6px;background:rgba(5,13,8,0.9);border:1px solid rgba(255,255,255,0.03);padding:6px;border-radius:8px}
+.bm-btn{background:transparent;border:none;color:var(--txt2);padding:6px 8px;border-radius:6px;cursor:pointer;font-weight:700}
+.bm-btn.active{background:rgba(255,255,255,0.03);color:var(--green)}
+
+/* Legend (bottomright) */
+.leaflet-legend{background:rgba(5,13,8,0.9);padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);color:var(--txt);font-size:13px}
+.legend-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.legend-swatch{width:14px;height:14px;border-radius:3px;flex-shrink:0}
+
+/* Map container */
+.leaflet-container{height:100%}
+
+/* Responsivo: compacta para celulares */
+@media(max-width:1000px){
+  #panel{width:360px}
+  .kgrid{grid-template-columns:repeat(2,1fr)}
+  .kval{font-size:20px}
+}
+@media(max-width:480px){
+  #panel{width:100%;position:absolute;right:0;bottom:0;top:60px;z-index:950}
+  .kgrid{grid-template-columns:repeat(2,1fr)}
+  .kval{font-size:18px}
+}
+</style>
+</head>
+<body>
+
+<!-- Loading / upload overlay -->
+<div id="load-overlay">
+  <div class="spin"></div>
+  <div id="load-detail">Carregando lc_cidades_rj.geojson...</div>
+  <div id="missing-files" style="color:#fca5a5;margin-top:8px"></div>
+  <div style="display:flex;gap:8px;margin-top:8px">
+    <button id="retry-btn" class="upload-btn">🔁 Tentar novamente (fetch)</button>
+    <button id="open-upload-btn" class="upload-btn">📂 Upload arquivos</button>
+    <input id="file-input" type="file" accept=".geojson,.json" style="display:none" multiple>
+  </div>
+  <div class="small-muted">Dica: rode com servidor local (python -m http.server) ou use Upload se abrir via file://</div>
+</div>
+
+<!-- Header -->
+<div id="hdr">
+  <div class="hdr-icon">🌊</div>
+  <div class="hdr-t">
+    <h1>Monitoramento de Mudanças em Linhas de Costa</h1>
+    <p>Cidades do Litoral do Rio de Janeiro, Brasil</p>
+  </div>
+</div>
+
+<!-- Main -->
+<div id="main">
+  <div id="map"></div>
+
+  <div id="panel">
+    <div>
+      <div class="panel-title">
+        <h2>Mudanças em Linhas de Costa</h2>
+        <div class="panel-sub">Fonte: Base de dados Cartogeo</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+        <div id="top-controls">
+          <select id="filter-fen" class="select"><option value="">Todos fenômenos</option></select>
+          <select id="filter-cidade" class="select"><option value="">Todas cidades</option></select>
+        </div>
+        <button class="btn-export" onclick="downloadCSV()">EXPORT RESULTS</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h4>Fenômeno</h4>
+      <div class="hotspots" id="hotspots-list"><div style="color:var(--muted)">Carregando...</div></div>
+    </div>
+
+    <div class="card">
+      <h4>KPIs - Monitoramento de Mudanças de Linhas de Costas</h4>
+      <div class="kgrid" id="key-kpis">
+        <div class="kpi"><div class="klabel">Domicílios</div><div class="kval" id="k-domic"><span>—</span></div></div>
+        <div class="kpi"><div class="klabel">População</div><div class="kval" id="k-pop"><span>—</span></div></div>
+        <div class="kpi"><div class="klabel">Mangue (ha)</div><div class="kval" id="k-mangue"><span>—</span></div></div>
+        <div class="kpi"><div class="klabel">Restinga (ha)</div><div class="kval" id="k-restinga"><span>—</span></div></div>
+      </div>
+    </div>
+
+    <!-- Logo centralizada logo abaixo dos cards -->
+    <div class="logo-container">
+      <img src="logo_cartogeo.png" alt="Cartogeo logo" id="logo-cartogeo">
+    </div>
+
+    <div style="margin-top:auto" class="small-muted">Se não carregar automaticamente, atualize a página.</div>
+  </div>
+</div>
+
+<!-- Basemap toggle container -->
+<div id="basemap-toggle" style="display:none">
+  <button class="bm-btn active" id="bm-osm">Mapa</button>
+  <button class="bm-btn" id="bm-sat">Satélite</button>
+</div>
+
+<script>
+// ----------------- Config & helpers -----------------
+const COLORS = {
+  Erosao: getComputedStyle(document.documentElement).getPropertyValue('--erosao').trim() || '#ff3333',
+  Prograd: getComputedStyle(document.documentElement).getPropertyValue('--prograd').trim() || '#1e90ff',
+  Outros: '#bbbbbb'
+};
+let cidadesGeoJSON = null, cidadesFeatures = [];
+let cityFieldMap = {};
+let map = null, layerCities = null;
+let tileOSM = null, tileSat = null;
+const loadOverlay = document.getElementById('load-overlay');
+const loadDetail = document.getElementById('load-detail');
+const missingFiles = document.getElementById('missing-files');
+
+function num(v){ return Number(String(v).replace(',','.')) || 0; }
+function fmtDec(v){ return num(v).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1}); }
+function fmtInt(v){ return Math.round(num(v)).toLocaleString('pt-BR'); }
+function byId(id){ return document.getElementById(id); }
+
+// normaliza string para comparação de chaves (remove acentos/pontos/espaços)
+function normKey(k){
+  if(!k) return '';
+  return String(k).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,'');
+}
+
+function findKey(obj, candidates){
+  if(!obj) return null;
+  const keys = Object.keys(obj);
+  const map = {};
+  keys.forEach(k => map[normKey(k)] = k);
+  for(const c of candidates){
+    if(map[normKey(c)]) return map[normKey(c)];
+  }
+  return null;
+}
+
+// mapeia campos do seu geojson para nomes canônicos
+function buildCityFieldMap(sampleProps){
+  const map = {};
+  map.ano = findKey(sampleProps, ['ano','year']);
+  map.cidade = findKey(sampleProps, ['cidade','city','municipio','nome','name']);
+  map.media_m = findKey(sampleProps, ['media_m','média_m','media','media_m']);
+  map.fenomeno = findKey(sampleProps, ['fenomeno','fenômeno','fenomeno','phenomenon']);
+  map.distancia_km = findKey(sampleProps, ['distancia_km','distancia','dist_km','distance_km']);
+  map.percent = findKey(sampleProps, ['percent','percentual','porcent']);
+  map.domicilios = findKey(sampleProps, ['domicilios','domicílios','domicilio','dom']);
+  map.pop_est = findKey(sampleProps, ['pop_est','populacao','população','pop_estimada','pop']);
+  map.mangue_ha = findKey(sampleProps, ['mangue_ha','manguezal','mangue']);
+  map.restringae_ha = findKey(sampleProps, ['restringae_ha','restringa_ha','restrin','restinga','restinga_ha']);
+  return map;
+}
+
+function getProp(props, canonical){
+  if(!props) return null;
+  const k = cityFieldMap[canonical];
+  if(k && props[k] !== undefined && props[k] !== null) return props[k];
+  return null;
+}
+
+// ----------------- Map init + basemap -----------------
+function initMap(){
+  if(map) return;
+  map = L.map('map',{zoomControl:true}).setView([-22.8,-43.2],7);
+  tileOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19, attribution:'© OpenStreetMap'}).addTo(map);
+  tileSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19, attribution:'© Esri'});
+  // show basemap toggle
+  const bm = document.getElementById('basemap-toggle');
+  if(bm) bm.style.display = 'block';
+  document.getElementById('bm-osm').addEventListener('click', ()=> setBasemap('osm'));
+  document.getElementById('bm-sat').addEventListener('click', ()=> setBasemap('sat'));
+  // add legend control (fenômenos)
+  addPhenomenaLegend();
+}
+
+function setBasemap(type){
+  if(!map) return;
+  if(type === 'sat'){
+    if(map.hasLayer(tileOSM)) map.removeLayer(tileOSM);
+    if(!map.hasLayer(tileSat)) tileSat.addTo(map);
+    document.getElementById('bm-osm').classList.remove('active');
+    document.getElementById('bm-sat').classList.add('active');
+  } else {
+    if(map.hasLayer(tileSat)) map.removeLayer(tileSat);
+    if(!map.hasLayer(tileOSM)) tileOSM.addTo(map);
+    document.getElementById('bm-sat').classList.remove('active');
+    document.getElementById('bm-osm').classList.add('active');
+  }
+}
+
+// ----------------- Styling rules: color + triple thickness -----------------
+const baseWeight = 0.6;
+const weightFactor = 3; // triple thickness
+const computedWeight = baseWeight * weightFactor; // e.g., 1.8
+
+function canonicalPhenomenon(raw){
+  const s = String(raw || '').trim();
+  const nk = normKey(s);
+  if(nk.includes('eros')) return 'Erosão';
+  if(nk.includes('prograd') || nk.includes('prograda') || nk.includes('progradacao')) return 'Progradação';
+  if(nk === '') return 'Outros';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function phenotypeColorByKey(key){
+  if(key === 'Erosão') return COLORS.Erosao;
+  if(key === 'Progradação') return COLORS.Prograd;
+  return COLORS.Outros;
+}
+
+function styleForFeature(feature){
+  const p = feature && feature.properties ? feature.properties : {};
+  const fenRaw = getProp(p,'fenomeno') ?? p.fenomeno ?? '';
+  const key = canonicalPhenomenon(fenRaw);
+  const color = phenotypeColorByKey(key);
+  return {
+    color: color,
+    weight: computedWeight,
+    opacity: 0.95,
+    fillOpacity: 0.12,
+    dashArray: ''
+  };
+}
+
+// ----------------- Draw cities layer (handles points & lines/polys) -----------------
+function drawCitiesLayer(featuresCollection){
+  if(!map) initMap();
+  if(layerCities){ layerCities.remove(); layerCities = null; }
+  const geo = featuresCollection || cidadesGeoJSON;
+  if(!geo) return;
+
+  layerCities = L.geoJSON(geo, {
+    style: function(feature){
+      return styleForFeature(feature);
+    },
+    pointToLayer: function(feature, latlng){
+      const p = feature.properties || {};
+      const key = canonicalPhenomenon(getProp(p,'fenomeno') ?? p.fenomeno ?? '');
+      const color = phenotypeColorByKey(key);
+      return L.circleMarker(latlng, {radius:6, color: color, fillColor: color, fillOpacity:0.9, weight: Math.max(1, Math.round(computedWeight))});
+    },
+    onEachFeature: function(feature, layer){
+      const p = feature.properties || {};
+      const cidade = getProp(p,'cidade') || p.cidade || p.name || '—';
+      const ano = getProp(p,'ano') || p.ano || '';
+      const media = getProp(p,'media_m') ?? p.media_m ?? p.media ?? '';
+      const dist = getProp(p,'distancia_km') ?? p.distancia_km ?? p.distancia ?? '';
+      const fenomeno = getProp(p,'fenomeno') ?? p.fenomeno ?? '';
+      const popup = `<div style="min-width:220px"><b style="color:#bbf7d0">${escapeHtml(String(cidade))}</b><br>Ano: ${escapeHtml(String(ano))}<br>Fenômeno: ${escapeHtml(String(fenomeno))}<br>Média (m): ${escapeHtml(String(media))}<br>Distância (km): ${fmtDec(dist)}</div>`;
+      layer.bindPopup(popup);
+      layer.on('mouseover', function(){
+        try{
+          const lw = (feature.geometry && feature.geometry.type && feature.geometry.type.toLowerCase().includes('point')) ? Math.max(1, Math.round(computedWeight)) : computedWeight + 1.2;
+          layer.setStyle && layer.setStyle({weight: lw, opacity:1});
+        }catch(e){}
+      });
+      layer.on('mouseout', function(){
+        try{ layer.setStyle && layer.setStyle(styleForFeature(feature)); }catch(e){}
+      });
+      layer.on('click', function(){
+        try{
+          if(feature.geometry && feature.geometry.type && feature.geometry.type.toLowerCase().includes('point')){
+            map.setView(layer.getLatLng(), Math.max(map.getZoom(),10));
+          } else if(layer.getBounds){
+            map.fitBounds(layer.getBounds(), {padding:[40,40]});
+          }
+        }catch(e){}
+      });
+    }
+  }).addTo(map);
+
+  try{
+    const b = layerCities.getBounds();
+    if(b && b.isValid && b.isValid()) map.fitBounds(b.pad(0.12));
+  }catch(e){}
+}
+
+// ----------------- Filters, fenómenos & KPIs -----------------
+function buildFilters(){
+  const fenSel = byId('filter-fen');
+  const cidSel = byId('filter-cidade');
+  fenSel.innerHTML = '<option value="">Todos fenômenos</option>';
+  cidSel.innerHTML = '<option value="">Todas cidades</option>';
+
+  const fenSet = new Set();
+  const cidSet = new Set();
+  cidadesFeatures.forEach(f=>{
+    const p = f.properties || {};
+    const fen = getProp(p,'fenomeno') ?? p.fenomeno ?? '';
+    const cidade = getProp(p,'cidade') ?? p.cidade ?? '';
+    if(String(fen).trim()!=='') fenSet.add(String(fen).trim());
+    if(String(cidade).trim()!=='') cidSet.add(String(cidade).trim());
+  });
+
+  // sort cities alphabetically
+  Array.from(cidSet).sort((a,b)=>a.localeCompare(b,'pt-BR')).forEach(c => {
+    const o = document.createElement('option'); o.value = c; o.textContent = c; cidSel.appendChild(o);
+  });
+  Array.from(fenSet).sort((a,b)=>a.localeCompare(b,'pt-BR')).forEach(f => {
+    const o = document.createElement('option'); o.value = f; o.textContent = f; fenSel.appendChild(o);
+  });
+
+  fenSel.onchange = applyFilters;
+  cidSel.onchange = applyFilters;
+}
+
+function applyFilters(){
+  const fen = byId('filter-fen').value;
+  const cidade = byId('filter-cidade').value;
+  const filtered = cidadesFeatures.filter(f=>{
+    const p = f.properties || {};
+    if(fen && String((getProp(p,'fenomeno') ?? p.fenomeno ?? '')).trim() !== String(fen)) return false;
+    if(cidade && String((getProp(p,'cidade') ?? p.cidade ?? '')).trim() !== String(cidade)) return false;
+    return true;
+  });
+  renderPhenomenaAndKpis(filtered);
+  if(layerCities) layerCities.remove();
+  drawCitiesLayer({type:'FeatureCollection', features: filtered});
+}
+
+// calculates sum distances per phenomenon and updates KPIs (incl Restinga)
+function renderPhenomenaAndKpis(features){
+  const feats = features || cidadesFeatures;
+  if(!feats || feats.length===0){
+    byId('hotspots-list').innerHTML = '<div style="color:var(--muted)">Nenhum registro carregado.</div>';
+    byId('k-domic').textContent = '—'; byId('k-pop').textContent = '—'; byId('k-mangue').textContent = '—'; byId('k-restinga').textContent = '—';
+    return;
+  }
+
+  // sums by canonical phenomenon
+  const sums = {}; // e.g., { 'Erosão': 123, 'Progradação': 45, 'Outros': 5 }
+  let totalDomic = 0, totalPop = 0, totalMangue = 0, totalRestinga = 0;
+
+  feats.forEach(f=>{
+    const p = f.properties || {};
+    const fenRaw = getProp(p,'fenomeno') ?? p.fenomeno ?? '';
+    const key = canonicalPhenomenon(fenRaw);
+    const dist = num(getProp(p,'distancia_km') ?? p.distancia_km ?? p.distancia ?? 0);
+
+    if(!sums[key]) sums[key] = 0;
+    sums[key] += dist;
+
+    totalDomic += num(getProp(p,'domicilios') ?? p.domicilios ?? p.dom ?? 0);
+    totalPop += num(getProp(p,'pop_est') ?? p.pop_est ?? p.pop ?? 0);
+    totalMangue += num(getProp(p,'mangue_ha') ?? p.mangue_ha ?? p.mangue ?? 0);
+    totalRestinga += num(getProp(p,'restringae_ha') ?? p.restringae_ha ?? p.restringa_ha ?? p.restinga ?? 0);
+  });
+
+  // ensure Erosão and Progradação appear first if present
+  const order = [];
+  if(sums['Erosão'] !== undefined) order.push('Erosão');
+  if(sums['Progradação'] !== undefined) order.push('Progradação');
+  // other keys
+  Object.keys(sums).forEach(k => { if(!order.includes(k)) order.push(k); });
+
+  // build HTML
+  const rowsHtml = order.map(k => {
+    const color = phenotypeColorByKey(k);
+    const dist = fmtDec(sums[k] || 0);
+    return `<div class="hs-item"><div class="hs-left"><div class="hs-bullet" style="background:${color}"></div><div><div class="hs-label">${escapeHtml(k)}</div></div></div><div class="hs-value">${dist} km</div></div>`;
+  }).join('');
+
+  byId('hotspots-list').innerHTML = rowsHtml;
+
+  byId('k-domic').textContent = fmtInt(totalDomic);
+  byId('k-pop').textContent = fmtInt(totalPop);
+  byId('k-mangue').textContent = fmtDec(totalMangue);
+  byId('k-restinga').textContent = fmtDec(totalRestinga);
+}
+
+// ----------------- CSV export -----------------
+function downloadCSV(){
+  if(!cidadesFeatures || cidadesFeatures.length===0){ alert('Nenhum dado para exportar.'); return; }
+  const headers = ['ano','cidade','média_m','fenômeno','distancia_km','percent','domicilios','pop_est','mangue_ha','restringae_ha'];
+  const rows = [headers];
+  cidadesFeatures.forEach(f=>{
+    const p = f.properties || {};
+    rows.push([
+      getProp(p,'ano') ?? '',
+      getProp(p,'cidade') ?? '',
+      getProp(p,'media_m') ?? getProp(p,'média_m') ?? '',
+      getProp(p,'fenomeno') ?? '',
+      getProp(p,'distancia_km') ?? '',
+      getProp(p,'percent') ?? '',
+      getProp(p,'domicilios') ?? '',
+      getProp(p,'pop_est') ?? '',
+      getProp(p,'mangue_ha') ?? '',
+      getProp(p,'restringae_ha') ?? ''
+    ]);
+  });
+  const csv = rows.map(r => r.map(c => String(c).includes(',') ? `"${String(c).replace(/"/g,'""')}"` : String(c)).join(',')).join('\n');
+  const a = document.createElement('a'); a.href = 'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(csv); a.download = 'lc_cidades_rj_export.csv'; a.click();
+}
+
+// escape HTML to avoid injection when showing city names
+function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// ----------------- Fetch / Upload handling -----------------
+async function fetchJsonSafe(url){
+  const r = await fetch(url);
+  if(!r.ok) throw new Error(`HTTP ${r.status}`);
+  return await r.json();
+}
+
+async function loadLcCidades(){
+  loadDetail.textContent = 'Tentando carregar lc_cidades_rj.geojson via fetch...';
+  missingFiles.textContent = '';
+  try {
+    const j = await fetchJsonSafe('lc_cidades_rj.geojson');
+    cidadesGeoJSON = j;
+    cidadesFeatures = (j.features || []).map(f => ({...f}));
+    cityFieldMap = buildCityFieldMap(cidadesFeatures[0]?.properties || {});
+    loadDetail.textContent = 'Arquivo lc_cidades_rj.geojson carregado.';
+    finalizeLoad();
+    return;
+  } catch(err){
+    console.warn('fetch failed:', err);
+    loadDetail.textContent = 'Arquivo lc_cidades_rj.geojson não encontrado via fetch.';
+    missingFiles.innerHTML = 'Arquivo ausente: <strong>lc_cidades_rj.geojson</strong>. Use "Upload arquivos" para selecionar localmente.';
+    // keep overlay visible (user can upload)
+  }
+}
+
+// handle uploaded files (accepts lc_cidades_rj.geojson or any geojson)
+function setupFileInput(){
+  const input = document.getElementById('file-input');
+  const btn = document.getElementById('open-upload-btn');
+  const retry = document.getElementById('retry-btn');
+  btn.addEventListener('click', ()=> input.click());
+  retry.addEventListener('click', ()=> { loadLcCidades(); });
+
+  input.addEventListener('change', async (ev)=>{
+    const files = Array.from(ev.target.files || []);
+    if(files.length === 0) return;
+    loadDetail.textContent = `Lendo ${files.length} arquivo(s)...`;
+    for(const f of files){
+      const name = f.name.toLowerCase();
+      try{
+        const txt = await f.text();
+        if(name.endsWith('.geojson') || name.endsWith('.json')){
+          const j = JSON.parse(txt);
+          const sample = j.features && j.features[0] && j.features[0].properties ? j.features[0].properties : {};
+          cidadesGeoJSON = j;
+          cidadesFeatures = (j.features || []).map(feat => feat);
+          cityFieldMap = buildCityFieldMap(sample);
+          loadDetail.textContent = `GeoJSON "${f.name}" carregado localmente.`;
+        } else {
+          console.warn('Formato não suportado:', f.name);
+        }
+      } catch(e){
+        console.error('Erro lendo arquivo', f.name, e);
+      }
+    }
+    finalizeLoad();
+    input.value = '';
+  });
+}
+
+function finalizeLoad(){
+  try {
+    initMap();
+    drawCitiesLayer();
+    buildFilters();
+    renderPhenomenaAndKpis();
+    // hide overlay
+    if(loadOverlay) loadOverlay.style.display = 'none';
+  } catch(e){ console.error(e); }
+}
+
+// ----------------- Legend for phenomena -----------------
+function addPhenomenaLegend(){
+  const legend = L.control({position:'bottomright'});
+  legend.onAdd = function(){
+    const div = L.DomUtil.create('div','leaflet-legend');
+    div.innerHTML = `
+      <div style="font-weight:700;margin-bottom:6px">Fenômeno</div>
+      <div class="legend-row"><div class="legend-swatch" style="background:${COLORS.Erosao}"></div><div>Erosão</div></div>
+      <div class="legend-row"><div class="legend-swatch" style="background:${COLORS.Prograd}"></div><div>Progradação</div></div>
+      <div class="legend-row"><div class="legend-swatch" style="background:${COLORS.Outros}"></div><div>Outros</div></div>
+    `;
+    return div;
+  };
+  legend.addTo(map || (function(){initMap(); return map;})());
+}
+
+// ----------------- Boot -----------------
+window.addEventListener('load', ()=>{
+  setupFileInput();
+  loadLcCidades();
+});
+
+// expose small helpers for debugging
+window._app = { drawCitiesLayer, renderPhenomenaAndKpis, setBasemap };
+
+</script>
+</body>
+</html>
